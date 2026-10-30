@@ -1,0 +1,189 @@
+openapi: 3.0.3
+info:
+  title: Location Sharing Node API
+  version: 1.0.0
+  description: Standalone Node receiver for location uploads and authenticated coordinate logs.
+servers:
+  - url: https://your-server.example
+security:
+  - bearerAuth: []
+paths:
+  /health:
+    get:
+      operationId: receiverHealth
+      summary: Check that the receiver is running
+      security: []
+      responses:
+        '200':
+          description: Receiver is running; does not verify device uploads
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok: {type: boolean, enum: [true]}
+  /locations:
+    post:
+      operationId: uploadLocation
+      summary: Accept a location or batch and return the minimum gap before the next upload
+      description: The receiver must deduplicate each record id. A timeout can occur after acceptance, including partial batch acceptance. Repeated ids must not create duplicate side effects. The bounded device queue evicts oldest records at configured size/age limits.
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: {type: string}
+          description: Single upload uses the record UUID; batch uses SHA256 of comma-joined ordered record ids. Deduplicate individual record ids even if batches change after partial acceptance.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              description: Configurable JSON. Default rootProperty is location; single uploads wrap one record and batches wrap an array. Templates may reshape records into objects or arrays. Receiver must agree with rootProperty and templates.
+            example:
+              location:
+                uuid: 6b5c48a1-dc93-4fce-8876-825e797b21ea
+                timestamp: '2026-10-30T09:00:00.000Z'
+                coords: {latitude: 1.3521, longitude: 103.8198, accuracy: 8, altitude: null, speed: null, heading: null}
+                extras: {deviceId: demo-device}
+      responses:
+        '200':
+          description: Accepted, or already accepted. A valid intervalSeconds updates native pacing; absent or invalid values preserve the previous interval. All 2xx statuses acknowledge the fix.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  intervalSeconds: {type: integer, minimum: 15, maximum: 86400}
+              example: {intervalSeconds: 120}
+        '204': {description: Accepted, preserve the current interval.}
+        '400': {description: Bad request. Drop selected records; later records are still eligible.}
+        '401': {description: Invalid credentials. Drop selected records; refresh credentials using ready with updated headers.}
+        '408': {description: Retryable timeout.}
+        '429': {description: Retryable rate limit. Android uses exponential WorkManager backoff; iOS waits for a later eligible location event. Retry-After is not interpreted.}
+        '503': {description: Retryable server failure.}
+    put:
+      operationId: putLocation
+      summary: Upload locations using PUT when configured in HttpConfig
+      description: Same configurable JSON and acknowledgment contract as POST. POST remains the default. Params are additional top-level fields.
+      parameters:
+        - $ref: '#/paths/~1locations/post/parameters/0'
+      requestBody:
+        $ref: '#/paths/~1locations/post/requestBody'
+      responses:
+        '200':
+          $ref: '#/paths/~1locations/post/responses/200'
+        '204': {description: Accepted; preserve interval.}
+        '400': {description: Invalid record or batch.}
+        '401': {description: Unauthorized.}
+        '408': {description: Retryable timeout.}
+        '429': {description: Retryable rate limit.}
+        '503': {description: Retryable server error.}
+    patch:
+      operationId: patchLocation
+      summary: Upload configurable location JSON using PATCH
+      parameters:
+        - $ref: '#/paths/~1locations/post/parameters/0'
+      requestBody:
+        $ref: '#/paths/~1locations/post/requestBody'
+      responses:
+        '200':
+          $ref: '#/paths/~1locations/post/responses/200'
+        '401': {description: Unauthorized.}
+        '503': {description: Retryable server failure.}
+  /logs:
+    get:
+      operationId: getCoordinateLogs
+      summary: Read recent saved coordinates, newest first
+      description: Requires ADMIN_TOKEN; the upload token cannot read logs. Returns up to the last 500 saved records; the file retains the full history. Records include a server receivedAt timestamp. Cache-Control is no-store.
+      parameters:
+        - in: query
+          name: limit
+          schema: {type: integer, minimum: 1, maximum: 500, default: 50}
+      responses:
+        '200':
+          description: Saved coordinate logs
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [count, locations]
+                properties:
+                  count: {type: integer, minimum: 0}
+                  locations:
+                    type: array
+                    maxItems: 500
+                    items: {$ref: '#/components/schemas/LocationRecord'}
+        '400': {description: Invalid limit}
+        '401': {description: Missing or invalid admin token}
+        '503': {description: Log storage unavailable}
+  /interval:
+    put:
+      operationId: changeDemoInterval
+      summary: Change the reference server interval (demo admin API only)
+      description: Requires ADMIN_TOKEN. The phone learns the new interval from its next successful upload, not instantly. Production servers should store per-device settings.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [intervalSeconds]
+              properties:
+                intervalSeconds: {type: integer, minimum: 15, maximum: 86400}
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  intervalSeconds: {type: integer, minimum: 15, maximum: 86400}
+              example: {intervalSeconds: 120}
+        '400': {description: Invalid interval}
+        '401': {description: Missing or invalid admin token}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer}
+  schemas:
+    LocationBatch:
+      type: object
+      required: [locations]
+      properties:
+        locations:
+          type: array
+          minItems: 1
+          items: {$ref: '#/components/schemas/LocationRecord'}
+    LocationRecord:
+      type: object
+      required: [coords, extras]
+      allOf:
+        - anyOf:
+            - required: [uuid]
+            - required: [id]
+        - anyOf:
+            - required: [timestamp]
+            - required: [recordedAt]
+      properties:
+        uuid: {type: string, format: uuid}
+        id: {type: string, format: uuid}
+        timestamp:
+          oneOf:
+            - {type: string, format: date-time}
+            - {type: number, description: Epoch milliseconds}
+        receivedAt: {type: string, format: date-time}
+        recordedAt: {type: string, format: date-time}
+        extras: {type: object, additionalProperties: true}
+        coords:
+          type: object
+          required: [latitude, longitude, accuracy, altitude, speed, heading]
+          properties:
+            latitude: {type: number, minimum: -90, maximum: 90}
+            longitude: {type: number, minimum: -180, maximum: 180}
+            accuracy: {type: number, minimum: 0, description: Horizontal accuracy in metres}
+            altitude: {type: number, nullable: true, description: Metres}
+            speed: {type: number, nullable: true, minimum: 0, description: Metres per second}
+            heading: {type: number, nullable: true, minimum: 0, maximum: 360, description: Degrees clockwise from north}

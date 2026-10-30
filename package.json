@@ -1,0 +1,16 @@
+{
+  "name": "location-sharing-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Simple Node HTTP API for React Native location uploads",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.9.0"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env index.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check:http": "node scripts/check-http.mjs"
+  }
+}
