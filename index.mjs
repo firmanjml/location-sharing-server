@@ -41,7 +41,7 @@ export function createLocationFileStore(filename) {
 }
 
 // strict:false is for testing: any JSON body is stored as received, with an id from uuid/id, else the Idempotency-Key.
-export function createReceiver({token, adminToken, intervalSeconds = 60, rootProperty = 'location', strict = true, onLocation = () => {}, getLogs = async () => []} = {}) {
+export function createReceiver({token, adminToken, intervalSeconds = 60, rootProperty = 'location', strict = true, logRequest = () => {}, onLocation = () => {}, getLogs = async () => []} = {}) {
   if (!token) throw new Error('Set a nonempty DEMO_TOKEN');
   if (!validInterval(intervalSeconds)) throw new Error('RESPONSE_INTERVAL_SECONDS must be an integer from 15 to 86400');
   // Demo only: bounded in-memory deduplication. Use a durable table with a unique id in production.
@@ -65,7 +65,9 @@ export function createReceiver({token, adminToken, intervalSeconds = 60, rootPro
     }
     if ((url.pathname !== '/locations' || !['POST', 'PUT', 'PATCH'].includes(request.method)) && (url.pathname !== '/interval' || request.method !== 'PUT'))
       return respond(404, {error: 'not found'});
-    let body;
+    let body, text = '';
+    const logged = extra => logRequest({receivedAt: new Date().toISOString(), method: request.method, path: url.pathname,
+      idempotencyKey: request.headers['idempotency-key'], contentType: request.headers['content-type'], ...extra});
     try {
       let size = 0;
       const chunks = [];
@@ -74,8 +76,10 @@ export function createReceiver({token, adminToken, intervalSeconds = 60, rootPro
         if (size > 8 * 1024 * 1024) return respond(413, {error: 'body too large'});
         chunks.push(chunk);
       }
-      body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-    } catch { return respond(400, {error: 'invalid JSON'}); }
+      text = Buffer.concat(chunks).toString('utf8');
+      body = JSON.parse(text);
+    } catch { if (url.pathname === '/locations') logged({invalidJson: true, raw: text.slice(0, 65536)}); return respond(400, {error: 'invalid JSON'}); }
+    if (url.pathname === '/locations') logged({body});
     if (isAdmin) {
       if (!validInterval(body?.intervalSeconds)) return respond(400, {error: 'invalid intervalSeconds'});
       intervalSeconds = body.intervalSeconds;
@@ -133,6 +137,7 @@ export function startServer() {
   const handler = createReceiver({token: process.env.DEMO_TOKEN, adminToken: process.env.ADMIN_TOKEN,
     intervalSeconds: Number(process.env.RESPONSE_INTERVAL_SECONDS ?? 60),
     strict: process.env.STRICT_VALIDATION === '1',
+    logRequest: process.env.LOG_REQUESTS === '0' ? undefined : entry => console.log(`[request] ${JSON.stringify(entry)}`),
     getLogs: limit => store.getRecent(limit),
     onLocation: async record => {
       if (await store.save(record)) console.log(JSON.stringify({receivedAt: new Date().toISOString(), id: record.id,

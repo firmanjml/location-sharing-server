@@ -17,7 +17,7 @@ Publish this folder to your Node hosting provider and enable trusted HTTPS. In t
 - **HTTPS server endpoint:** `https://your-domain.example/locations`
 - **Bearer token:** the value of `DEMO_TOKEN`, without the `Bearer ` prefix
 
-Then tap **Start sharing**. By default the server runs in lenient test mode: it stores any JSON body it receives, including custom `locationTemplate` output. Records are deduplicated by their `uuid`/`id`, else by the `Idempotency-Key` header. Set `STRICT_VALIDATION=1` to require the app's default payload (the fields below).
+Then tap **Start sharing**. By default the server runs in lenient test mode: it stores any JSON body it receives, including custom `locationTemplate` output. Records are deduplicated by their `uuid`/`id`, else by the `Idempotency-Key` header. Set `STRICT_VALIDATION=1` to require the app's default payload (the fields below). Every upload body is printed to the server log as a `[request]` line (method, path, idempotency key and body, never the Authorization header). Set `LOG_REQUESTS=0` to turn that off.
 
 ## Endpoints
 

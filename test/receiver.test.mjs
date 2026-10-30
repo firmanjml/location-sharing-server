@@ -122,3 +122,16 @@ test('strict:false accepts any JSON shape, such as a flat custom template, and s
   assert.equal(stored.filter(record => record.id === fix.id).length, 1);
   assert.equal(stored.at(-1).value, 7);
 });
+test('logRequest receives every upload body but never the authorization header', async t => {
+  const logs = [];
+  const request = await fixture(t, {strict: false, logRequest: entry => logs.push(entry)});
+  const flat = {device: 'x', lat: 1.3};
+  assert.equal((await request('/locations', flat)).status, 200);
+  assert.equal((await request('/locations', fix, 'wrong')).status, 401);
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0].method, 'POST');
+  assert.equal(logs[0].path, '/locations');
+  assert.equal(logs[0].idempotencyKey, fix.id);
+  assert.deepEqual(logs[0].body, flat);
+  assert.ok(!JSON.stringify(logs).includes('test-only'));
+});
