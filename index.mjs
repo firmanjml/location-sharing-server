@@ -4,6 +4,7 @@ import https from 'node:https';
 import {mkdirSync, readFileSync} from 'node:fs';
 import {appendFile} from 'node:fs/promises';
 import {dirname, resolve} from 'node:path';
+import {randomUUID} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
 
 const validInterval = value => Number.isInteger(value) && value >= 15 && value <= 86400;
@@ -39,7 +40,8 @@ export function createLocationFileStore(filename) {
   return {save, async getRecent(limit) { await pending; return recent.slice(-limit).reverse(); }};
 }
 
-export function createReceiver({token, adminToken, intervalSeconds = 60, rootProperty = 'location', onLocation = () => {}, getLogs = async () => []} = {}) {
+// strict:false is for testing: any JSON body is stored as received, with an id from uuid/id, else the Idempotency-Key.
+export function createReceiver({token, adminToken, intervalSeconds = 60, rootProperty = 'location', strict = true, onLocation = () => {}, getLogs = async () => []} = {}) {
   if (!token) throw new Error('Set a nonempty DEMO_TOKEN');
   if (!validInterval(intervalSeconds)) throw new Error('RESPONSE_INTERVAL_SECONDS must be an integer from 15 to 86400');
   // Demo only: bounded in-memory deduplication. Use a durable table with a unique id in production.
@@ -83,8 +85,16 @@ export function createReceiver({token, adminToken, intervalSeconds = 60, rootPro
     const nullable = value => value === null || finite(value);
     const payload = rootProperty && Object.hasOwn(body ?? {}, rootProperty) ? body[rootProperty] : body?.locations ?? body;
     const batch = Array.isArray(payload);
-    const records = (batch ? payload : [payload]).map(record => ({...record,
-      id: record?.uuid ?? record?.id, recordedAt: record?.timestamp ?? record?.recordedAt}));
+    const key = request.headers['idempotency-key'];
+    const records = (batch ? payload : [payload]).map((record, index) => {
+      if (!strict) {
+        const fields = record && typeof record === 'object' && !Array.isArray(record) ? record : {value: record};
+        const own = [fields.uuid, fields.id].find(value => typeof value === 'string' && value);
+        const id = own ?? (typeof key === 'string' && key ? (batch ? `${key}:${index}` : key) : randomUUID());
+        return {...fields, id, recordedAt: fields.timestamp ?? fields.recordedAt ?? fields.ts};
+      }
+      return {...record, id: record?.uuid ?? record?.id, recordedAt: record?.timestamp ?? record?.recordedAt};
+    });
     const validRecord = record => {
       const coords = record?.coords;
       return typeof record?.id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(record.id)
@@ -96,9 +106,9 @@ export function createReceiver({token, adminToken, intervalSeconds = 60, rootPro
         && nullable(coords.altitude) && nullable(coords.speed) && nullable(coords.heading)
         && record.extras && typeof record.extras === 'object' && !Array.isArray(record.extras);
     };
-    if (!records.length || !records.every(validRecord)
+    if (strict && (!records.length || !records.every(validRecord)
         || typeof request.headers['idempotency-key'] !== 'string' || !request.headers['idempotency-key']
-        || (!batch && request.headers['idempotency-key'] !== records[0].id))
+        || (!batch && request.headers['idempotency-key'] !== records[0].id)))
       return respond(400, {error: 'invalid location record'});
     for (const record of records) {
       if (seen.has(record.id)) continue;
@@ -122,10 +132,12 @@ export function startServer() {
   const store = createLocationFileStore(filename);
   const handler = createReceiver({token: process.env.DEMO_TOKEN, adminToken: process.env.ADMIN_TOKEN,
     intervalSeconds: Number(process.env.RESPONSE_INTERVAL_SECONDS ?? 60),
+    strict: process.env.STRICT_VALIDATION === '1',
     getLogs: limit => store.getRecent(limit),
     onLocation: async record => {
       if (await store.save(record)) console.log(JSON.stringify({receivedAt: new Date().toISOString(), id: record.id,
-        latitude: record.coords.latitude, longitude: record.coords.longitude, recordedAt: record.recordedAt}));
+        latitude: record.coords?.latitude ?? record.lat ?? record.latitude, longitude: record.coords?.longitude ?? record.lng ?? record.longitude,
+        recordedAt: record.recordedAt}));
     }});
   const tls = process.env.TLS_CERT_FILE && process.env.TLS_KEY_FILE;
   const server = tls ? https.createServer({cert: readFileSync(process.env.TLS_CERT_FILE), key: readFileSync(process.env.TLS_KEY_FILE)}, handler)

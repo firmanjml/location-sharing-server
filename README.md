@@ -17,7 +17,7 @@ Publish this folder to your Node hosting provider and enable trusted HTTPS. In t
 - **HTTPS server endpoint:** `https://your-domain.example/locations`
 - **Bearer token:** the value of `DEMO_TOKEN`, without the `Bearer ` prefix
 
-Then tap **Start sharing**. The server accepts the app's default location payload. A custom template must retain the fields below or the receiver validation must be adapted to your template.
+Then tap **Start sharing**. By default the server runs in lenient test mode: it stores any JSON body it receives, including custom `locationTemplate` output. Records are deduplicated by their `uuid`/`id`, else by the `Idempotency-Key` header. Set `STRICT_VALIDATION=1` to require the app's default payload (the fields below).
 
 ## Endpoints
 
@@ -61,7 +61,7 @@ Successful response, with `RESPONSE_INTERVAL_SECONDS=20`:
 
 A batch uses an array under `location` and a nonempty `Idempotency-Key` header. Legacy direct records and a `locations` array are also accepted. `id`/`recordedAt` aliases and numeric epoch timestamps are supported. A single upload's key must equal its UUID. The app supplies these headers automatically.
 
-Invalid records return 400, missing/wrong tokens return 401, bodies over 8 MiB return 413, and a storage failure returns 503. Only the accepted location records are saved; authorization headers are not written to the location file.
+In strict mode (`STRICT_VALIDATION=1`) invalid records return 400; in the default lenient mode any JSON is accepted. Invalid JSON returns 400, missing/wrong tokens return 401, bodies over 8 MiB return 413, and a storage failure returns 503. Only the accepted location records are saved; authorization headers are not written to the location file.
 
 To change pacing:
 

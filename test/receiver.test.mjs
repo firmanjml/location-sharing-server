@@ -106,3 +106,19 @@ test('coordinate logs require admin credentials and return newest first with a b
   assert.deepEqual((await restored.getRecent(50)).map(record => record.id), [second.id, fix.id]);
   for (const limit of ['0','-1','501','nope','1.5']) assert.equal((await request(`/logs?limit=${limit}`, undefined, 'admin-test-only', 'GET')).status, 400);
 });
+test('strict:false accepts any JSON shape, such as a flat custom template, and still deduplicates', async t => {
+  const stored = [];
+  const request = await fixture(t, {strict: false, onLocation: record => stored.push(record)});
+  const flat = {device: 'x', lat: 1.3, lng: 103.8, ts: '2026-10-30T09:00:00Z', moving: true, battery: 0.9};
+  assert.equal((await request('/locations', flat)).status, 200);
+  assert.equal((await request('/locations', flat)).status, 200);
+  assert.equal((await request('/locations', {location: flat})).status, 200);
+  assert.equal((await request('/locations', {anything: [1, 2]})).status, 200);
+  assert.equal((await request('/locations', [flat, 'text', 7])).status, 200);
+  assert.equal((await request('/locations', fix, 'wrong')).status, 401);
+  assert.equal(stored[0].id, fix.id);
+  assert.equal(stored[0].lat, 1.3);
+  assert.equal(stored[0].recordedAt, flat.ts);
+  assert.equal(stored.filter(record => record.id === fix.id).length, 1);
+  assert.equal(stored.at(-1).value, 7);
+});
